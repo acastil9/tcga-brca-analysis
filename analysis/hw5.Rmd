@@ -1,0 +1,193 @@
+---
+title: "week5hw"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-12-17"
+---
+
+```{r setup, include=FALSE}
+library(breastCancerNKI)
+library(Biobase)
+
+setwd("~/Downloads")
+
+data(nki)
+
+# Expression and phenotype
+ge <- exprs(nki)
+t.m <- pData(nki)$t.rfs
+e.m <- pData(nki)$e.rfs
+
+# Binary cutoff (from notes)
+T <- 3000
+
+# Keep usable samples
+sample.sel <- !is.na(t.m) & (t.m >= T | (t.m < T & e.m == 1))
+ge <- ge[, sample.sel]
+e.m <- factor(e.m[sample.sel], levels = c(0,1))
+
+length(e.m)
+table(e.m)
+
+```
+
+# Problem 1
+
+
+```{r HW5.1, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE} 
+# Transpose first (samples = rows, genes = columns)
+X <- t(ge[1:500, ])
+
+# Remove genes with NA or zero variance
+keep <- apply(X, 2, function(x) {
+  all(is.finite(x)) && sd(x) > 0
+})
+
+X.clean <- X[, keep]
+
+X.scaled <- scale(X.clean)
+
+pca <- prcomp(X.scaled, center = TRUE, scale. = FALSE)
+
+
+plot(pca$x[,1], pca$x[,2],
+     col = as.numeric(e.m) + 1,
+     pch = 19,
+     xlab = "PC1", ylab = "PC2",
+     main = "PCA of NKI expression (top variable genes)")
+legend("topright", legend = levels(e.m), col = 2:3, pch = 19)
+
+
+
+tt.pvals <- apply(ge, 1, function(x) t.test(x ~ e.m)$p.value)
+
+# Order genes by significance
+df <- as.data.frame(t(ge[order(tt.pvals), ]))
+
+top1 <- names(df)[1]
+top2 <- names(df)[2]
+
+top1
+top2
+
+
+r12 <- cor(df[[1]], df[[2]], use="complete.obs")
+r12
+
+
+```
+
+
+## Conclusion
+
+# The PCA plot shows substantial overlap between the two outcome classes, with no clear separation along either PC1 or PC2. This suggests that the largest sources of variation in the gene expression data are not driven solely by recurrence status. While there are a few outliers and some local structure in the data, the overall overlap indicates that recurrence is not strongly captured by global expression patterns alone. This helps explain why the classification models achieved only moderate accuracy and why adding additional correlated genes did not substantially improve performance.
+
+
+# Problem 2
+
+```{r HW5.2, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE} 
+library(breastCancerNKI)
+library(Biobase)
+library(e1071)
+
+assess.prediction <- function(truth,predicted) {
+  predicted = predicted[!is.na(truth)]
+  truth = truth[!is.na(truth)]
+  truth = truth[!is.na(predicted)]
+  predicted = predicted[!is.na(predicted)]
+  cat("Accuracy:", sum(truth==predicted)/length(truth), "\n")
+}
+
+cross.validate <- function(predictor, formula, data, N=1000, n.out=5) {
+  truth <- numeric()
+  prediction <- numeric()
+  for (i in 1:N) {
+    leave.out <- sample(nrow(data), n.out)
+    train <- data[-leave.out,,drop=FALSE]
+    test <- data[leave.out,,drop=FALSE]
+    predictor$train(formula, train)
+    pred <- predictor$predict(test)
+    truth <- c(truth, e.m[leave.out])
+    prediction <- c(prediction, pred)
+  }
+  list(truth=truth, prediction=prediction)
+}
+
+
+dat1 <- data.frame(e.m = e.m, df[1])        # one gene
+dat2 <- data.frame(e.m = e.m, df[1:2])      # two genes
+
+
+
+predictor.LOG <- list(
+  model=NULL,
+  train=function(f,data) {
+    predictor.LOG$model <<- glm(f, data=data, family="binomial")
+  },
+  predict=function(newdata) {
+    as.numeric(predict(predictor.LOG$model, newdata, type="response") > 0.5)
+  }
+)
+
+
+cross.validate2 <- function(predictor, formula, data, N=1000, n.out=5) {
+  truth <- numeric()
+  prediction <- numeric()
+
+  for (i in 1:N) {
+    leave.out <- sample(nrow(data), n.out)
+    training.data <- data[-leave.out, , drop=FALSE]
+    test.data <- data[leave.out, , drop=FALSE]
+
+    predictor$train(formula, training.data)
+    pred <- predictor$predict(test.data)
+
+    truth <- c(truth, as.numeric(as.character(test.data$e.m)))
+    prediction <- c(prediction, pred)
+  }
+  list(truth=truth, prediction=prediction)
+}
+
+
+# One gene
+cv.log.1 <- cross.validate2(predictor.LOG, e.m ~ ., dat1, N=1000, n.out=5)
+
+# Two genes
+cv.log.2 <- cross.validate2(predictor.LOG, e.m ~ ., dat2, N=1000, n.out=5)
+
+assess.prediction(cv.nb.1$truth, cv.nb.1$prediction)
+assess.prediction(cv.nb.2$truth, cv.nb.2$prediction)
+
+
+
+# NB
+library(e1071)
+
+predictor.NB <- list(
+  model = NULL,
+  train = function(f, data, ...) {
+    # Ensure outcome is a factor with levels 0 and 1
+    data$e.m <- factor(data$e.m, levels = c(0,1))
+    predictor.NB$model <<- naiveBayes(f, data = data, ...)
+  },
+  predict = function(newdata = NULL) {
+    # newdata includes e.m column; model uses the predictors
+    pred <- predict(predictor.NB$model, newdata = newdata, type = "class")
+    as.numeric(as.character(pred))  # "0"/"1" -> 0/1
+  }
+)
+
+dat1 <- data.frame(e.m = e.m, df[1])
+dat2 <- data.frame(e.m = e.m, df[1:2])
+
+cv.nb.1 <- cross.validate2(predictor.NB, e.m ~ ., dat1, N = 1000, n.out = 5)
+cv.nb.2 <- cross.validate2(predictor.NB, e.m ~ ., dat2, N = 1000, n.out = 5)
+
+assess.prediction(cv.nb.1$truth, cv.nb.1$prediction)
+assess.prediction(cv.nb.2$truth, cv.nb.2$prediction)
+
+```
+
+## Conclusion
+# Overall, both logistic regression and naïve Bayes performed reasonably well on this dataset, but neither method benefited from adding a second gene. For logistic regression, the model using a single top gene achieved slightly better accuracy than the two-gene model, suggesting that the second gene did not add much independent information. Naïve Bayes showed a similar pattern, with the highest accuracy coming from the single gene model and a small drop in performance when a second gene was included. This likely reflects redundancy or correlation between the top genes, and in the case of naïve Bayes, may also indicate a violation of the conditional independence assumption. These results suggest that most of the predictive signal in this dataset is captured by a small number of strongly associated genes, and that adding more correlated features does not necessarily improve classification performance.

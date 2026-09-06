@@ -1,0 +1,361 @@
+---
+title: "Final"
+output: html_document
+date: "2024-12-11"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(survival)
+library(survminer)
+library(tibble)
+library(stats)
+library(limma)
+library(edgeR)
+
+```
+
+
+```{r}
+#Question 1
+
+#upload data
+mRNA_data <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_mRNA_expression.csv", header = TRUE)
+clinical_data <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_clinical_data.csv")
+
+#clean data
+filtered_clinical_data <- clinical_data %>%
+  filter(ER_Status_By_IHC %in% c("Positive", "Negative")) %>%
+  filter(!is.na(Overall_Survival_Months)) %>%
+  mutate(ER_Status_Binary = ifelse(ER_Status_By_IHC == "Positive", 1, 0))
+
+#linear regression
+model <- lm(Overall_Survival_Months ~ ER_Status_Binary, data = filtered_clinical_data)
+
+#95% confidence 
+confint(model, level = 0.95)
+
+coefficients <- coef(model)
+conf_intervals <- confint(model, level = 0.95)
+summary_output <- summary(model)
+
+print(coefficients)
+print(conf_intervals)
+print(summary_output)
+
+#results
+#Effect of ER_Status_Binary- While there is a negative association between positive ER status and overall survival months the effect is not statistically significant (p = 0.303).
+
+#Clinical Relevance- These results suggest that ER status might not be a strong predictor of overall survival months in this dataset.
+
+#Model Fit- The model explains very little of the variability in overall survival months, as indicated by the low R-squared value.
+
+```
+
+```{r, fig.height=5, fig.width=8}
+#Question 2
+
+#filter data 
+filtered_data <- clinical_data %>%
+  filter(ER_Status_By_IHC %in% c("Positive", "Negative")) %>%
+  filter(!is.na(Overall_Survival_Months), !is.na(Overall_Survival_Status)) %>%
+  mutate(ER_Status_Binary = ifelse(ER_Status_By_IHC == "Positive", 1, 0),
+         Survival_Status_Binary = ifelse(Overall_Survival_Status == "1:DECEASED", 1, 0))
+
+#cox
+cox_model <- coxph(Surv(Overall_Survival_Months, Survival_Status_Binary) ~ ER_Status_Binary, data = filtered_data)
+
+#kaplan-meier
+km_fit <- survfit(Surv(Overall_Survival_Months, Survival_Status_Binary) ~ ER_Status_By_IHC, data = filtered_data)
+
+#plot
+ggsurvplot(
+  km_fit,
+  data = filtered_data,
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE,
+  legend.labs = c("Negative", "Positive"),
+  xlab = "Overall Survival (Months)",
+  ylab = "Survival Probability",
+  title = "Kaplan-Meier Curves by ER Status"
+)
+
+#results
+#CI- The hazard ratio's value is 95% likely to fall between 0.4629 and 2.326. Since this interval includes 1 it suggests no significant difference in risk between positive and negative ER statuses.
+
+#A very high p-value indicates that the effect of ER status on survival is not statistically significant.
+
+#Hazard Ratio: Patients with positive ER status have a slightly higher hazard of death compared to those with negative ER status (HR = 1.038), but this effect is not statistically significant (p = 0.929).
+
+#Confidence Interval: The wide interval (0.4629, 2.32) and inclusion of 1 mean that the relationship is highly uncertain and possibly negligible.
+
+#Model Fit: The low concordance (0.539) and non-significant test statistics suggest that ER status does not meaningfully explain survival in this dataset.
+
+```
+
+
+```{r}
+# Question 3
+
+#r squared
+linear_model_r_squared <- summary(model)$r.squared
+
+#concordace 
+cox_model_concordance <- summary(cox_model)$concordance[1]
+
+
+#compare
+cat("Linear Model R-squared:", linear_model_r_squared, "\n")
+cat("Cox Model Concordance Index:", cox_model_concordance, "\n")
+
+#The R-squared indicates how much variation in survival months is explained by ER status. In Question 1, this value was ~1.2%, suggesting poor explanatory power.
+
+#The concordance index (0.539) indicates this model's ability to rank survival times correctly. This is more appropriate for survival data because it accounts for incomplete data (censoring).
+
+#The Cox regression model is better for our survival analysis because it accounts for both survival time and censoring. However its concordance index is low, possibly due to insufficient data.
+
+```
+
+
+```{r, warning=FALSE, fig.height=5, fig.width=8}
+#Question 4
+
+#load data
+mRNA_data <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_mRNA_expression.csv", row.names = 1)
+clinical_data <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_clinical_data.csv")
+
+#transpose mRNA data and prepare for merging
+mRNA_data_t <- as.data.frame(t(mRNA_data))
+mRNA_data_t <- rownames_to_column(mRNA_data_t, var = "Sample_ID_Tumor")
+
+#filter clinical data
+clinical_filtered <- clinical_data %>%
+  filter(ER_Status_By_IHC %in% c("Positive", "Negative")) %>%
+  filter(!is.na(Overall_Survival_Months), !is.na(Overall_Survival_Status)) %>%
+  mutate(Survival_Status_Binary = ifelse(Overall_Survival_Status == "1:DECEASED", 1, 0))
+
+#merge datasets
+merged_data <- clinical_filtered %>%
+  left_join(mRNA_data_t, by = "Sample_ID_Tumor")
+
+#survival status numeric
+merged_data$Overall_Survival_Status <- as.numeric(sub(":.*", "", merged_data$Overall_Survival_Status))
+
+#filter out rows with missing or invalid survival data
+merged_data <- merged_data %>%
+  filter(!is.na(Overall_Survival_Months), !is.na(Overall_Survival_Status)) %>%
+  filter(Overall_Survival_Status %in% c(0, 1))
+
+#gene columns are numeric
+clinical_columns <- c(
+  "Patient_ID", "Sample_ID_Tumor", "Sample_ID_Normal", "Diagnosis_Age",
+  "Disease_Stage", "Tumor_Stge_Coe", "Cancer_Type_Detailed",
+  "Disease_Free_Months", "Disease_Free_Status", "ER_Status_By_IHC",
+  "Fraction_Genome_Altered", "IHCHER2", "Overall_Survival_Months",
+  "Overall_Survival_Status", "PR_status_by_ihc", "Race_Category",
+  "Sex", "TMB_nonsynonymous", "Survival_Status_Binary"
+)
+
+gene_columns <- setdiff(colnames(merged_data), clinical_columns)
+gene_columns <- gene_columns[sapply(merged_data[, gene_columns], is.numeric)]
+
+
+# Split into training and testing datasets
+set.seed(123)
+train_indices <- sample(1:nrow(merged_data), size = 0.6 * nrow(merged_data))
+train_data <- merged_data[train_indices, ]
+test_data <- merged_data[-train_indices, ]
+
+# Check dimensions
+cat("Training set size:", nrow(train_data), "\n")
+cat("Testing set size:", nrow(test_data), "\n")
+
+
+# Initialize a named vector to store p-values
+gene_pvalues <- numeric(length(gene_columns))
+names(gene_pvalues) <- gene_columns
+
+# Run Cox regression for each gene
+for (gene in gene_columns) {
+  tryCatch({
+    cox_model <- coxph(
+      Surv(Overall_Survival_Months, Overall_Survival_Status) ~ train_data[[gene]],
+      data = train_data
+    )
+    gene_pvalues[gene] <- summary(cox_model)$coefficients[1, "Pr(>|z|)"]
+  }, error = function(e) {
+    gene_pvalues[gene] <- NA
+  })
+}
+
+# Remove genes with NA p-values
+gene_pvalues <- gene_pvalues[!is.na(gene_pvalues)]
+
+#FDR correction
+gene_pvalues_adj <- p.adjust(gene_pvalues, method = "fdr")
+
+#top 5 genes
+top_genes <- names(sort(gene_pvalues_adj))[1:5]
+cat("Top 5 significant genes:", top_genes, "\n")
+
+
+library(survminer)
+
+#kplan plots for the top genes
+for (gene in top_genes) {
+  # Create high/low expression groups based on median
+  test_data$Gene_HighLow <- ifelse(
+    test_data[[gene]] >= median(test_data[[gene]], na.rm = TRUE),
+    "High",
+    "Low"
+  )
+  
+  #fit survival
+  fit <- survfit(
+    Surv(Overall_Survival_Months, Overall_Survival_Status) ~ Gene_HighLow,
+    data = test_data
+  )
+  
+  #plot Kaplan curve
+  ggsurvplot(
+    fit,
+    data = test_data,
+    title = paste("Kaplan-Meier Curve for", gene),
+    xlab = "Overall Survival (Months)",
+    ylab = "Survival Probability",
+    risk.table = TRUE,
+    pval = TRUE
+  )
+}
+
+```
+
+
+```{r}
+#Question 5- Top 5:SMIM15, TRAPPC13, 6ORF62, CD46, COMMD10 (codes different in new data set being used)
+
+
+clinical_data <- read.delim("/Users/andrea/RforBiomed/data_clinical_patient.txt", header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+
+#select relevant columns
+clinical_data_clean <- clinical_data %>%
+  select(
+    X.Patient.Identifier,
+    Overall.Survival..Months.,
+    Overall.Survival.Status
+  )
+
+cleaned_data$OS_STATUS <- ifelse(
+  cleaned_data$OS_STATUS == "0:LIVING", 0,
+  ifelse(cleaned_data$OS_STATUS == "1:DECEASED", 1, NA)
+)
+
+#remove rows with missing data
+cleaned_data <- cleaned_data %>%
+  filter(!is.na(OS_MONTHS), !is.na(OS_STATUS))
+
+#clean gene data
+gene_data <- read.table("/Users/andrea/RforBiomed/data_mrna_agilent_microarray.txt", header = TRUE, sep = "\t")[, -2]
+
+gene_data_t <- as.data.frame(t(gene_data[-1]))
+colnames(gene_data_t) <- gene_data$Hugo_Symbol  # Set gene names as column headers
+gene_data_t$Sample_ID <- rownames(gene_data_t)  # Add Sample_ID column
+rownames(gene_data_t) <- NULL 
+
+#merge
+filtered_genes <- merged_data[merged_data$Hugo_Symbol %in% gene_data_t, ]
+
+#kaplan high low
+
+for (gene in gene_data_t) {
+  if (gene %in% merged_data$Hugo_Symbol) {
+    # Create mutation/expression group: Mutated vs. Wildtype or High vs. Low
+    merged_data$Gene_Group <- ifelse(
+      merged_data$Hugo_Symbol == gene & merged_data$CNA_Status == 1, # Adjust CNA_Status column if needed
+      "Mutated",
+      "Wildtype"
+    )
+    
+    #kaplan survival fit
+    fit <- survfit(Surv(OS_MONTHS, OS_STATUS) ~ Gene_Group, data = merged_data)
+    
+    #plot curve
+    ggsurvplot(
+      fit,
+      data = merged_data,
+      title = paste("Kaplan-Meier Curve for", gene),
+      xlab = "Overall Survival (Months)",
+      ylab = "Survival Probability",
+      risk.table = TRUE,
+      pval = TRUE
+    )
+  } else {
+    cat("Gene", gene, "not found in the dataset. Skipping...\n")
+  }
+}
+
+#cox regression
+#results dataframe
+cox_results <- data.frame(Gene = character(), HR = numeric(), pvalue = numeric())
+
+#cox regression for each gene
+for (gene in target_genes) {
+  if (gene %in% merged_data$Hugo_Symbol) {
+    tryCatch({
+      cox_model <- coxph(Surv(OS_MONTHS, OS_STATUS) ~ Gene_Group, data = merged_data)
+      summary_model <- summary(cox_model)
+      cox_results <- rbind(
+        cox_results,
+        data.frame(
+          Gene = gene,
+          HR = summary_model$coefficients["Gene_GroupMutated", "exp(coef)"],
+          pvalue = summary_model$coefficients["Gene_GroupMutated", "Pr(>|z|)"]
+        )
+      )
+    }, error = function(e) {
+      cat("Error in Cox regression for gene:", gene, "\n")
+    })
+  }
+}
+
+# Print Cox regression results
+print(cox_results)
+```
+
+```{r, warning=FALSE, fig.height=5, fig.width=8}
+# Create design matrix
+design <- model.matrix(~ 0 + clinical_matched$ER_Status)
+colnames(design) <- c("ER_Negative", "ER_Positive")
+
+# Convert to DGEList and normalize
+dge <- DGEList(counts = expr_filtered)
+dge <- calcNormFactors(dge)
+v <- voom(dge, design)
+
+
+# Fit model and test for differential expression
+fit <- lmFit(v, design)
+contrast.matrix <- makeContrasts(ER_Positive - ER_Negative, levels = design)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
+
+# Get top DE genes
+top_genes <- topTable(fit2, adjust = "fdr", number = 50)
+head(top_genes)
+
+
+# Save results
+write.csv(top_genes, "top_differential_genes_ER_Pos_vs_Neg.csv")
+
+# Filter significant DEGs
+significant_genes <- top_genes %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1)
+
+# View candidate biomarkers
+head(significant_genes)
+```
+
+
+
+

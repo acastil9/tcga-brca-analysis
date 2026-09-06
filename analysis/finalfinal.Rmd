@@ -1,0 +1,94 @@
+---
+title: "final.6.9"
+output: html_document
+date: "2025-06-09"
+---
+
+```{r setup, include=FALSE}
+# Load libraries
+library(dplyr)
+library(edgeR)
+library(limma)
+library(readr)
+
+# -------------------------
+# Step 1: Load the Data
+# -------------------------
+
+# Load expression data
+expr <- read.delim("/Users/andrea/MolProf/TCGA-BRCA.star_fpkm.tsv", row.names = 1, check.names = FALSE)
+
+# Load clinical matrix
+clinical <- read.delim("/Users/andrea/MolProf/BRCA_clinicalMatrix", row.names = 1, stringsAsFactors = FALSE)
+
+
+# Transpose clinical data to match sample orientation
+#clinical <- as.data.frame(t(clinical))
+#clinical$sample_id <- rownames(clinical)
+```
+
+```{r}
+# -------------------------
+# Step 2: Filter HER2+ Tumors and Normals
+# -------------------------
+# Remove anything after the fourth dash (e.g., "-01A-01R" -> "-01A")
+clean_ids <- gsub("^(TCGA-\\w{2}-\\w{4}-\\w{3}).*", "\\1", colnames(expr))
+
+# Apply cleaned names
+colnames(expr) <- clean_ids
+
+
+# Create sample group labels
+clinical_filtered <- clinical %>%
+  filter(sample_type %in% c("Primary Tumor", "Solid Tissue Normal")) %>%
+  mutate(
+    sample_group = case_when(
+      sample_type == "Solid Tissue Normal" ~ "Normal",
+      sample_type == "Primary Tumor" & HER2_Final_Status_nature2012 == "Positive" ~ "HER2_Positive",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(sample_group))
+
+# Subset expression data to matching samples
+common_samples <- intersect(colnames(expr), clinical_filtered$sample_id)
+expr_filtered <- expr[, common_samples]
+clinical_filtered <- clinical_filtered %>% filter(sample_id %in% colnames(expr_filtered))
+
+# Match order
+expr_filtered <- expr_filtered[, clinical_filtered$sample_id]
+```
+
+```{r}
+# -------------------------
+# Step 3: Differential Expression (limma-voom)
+# -------------------------
+
+group <- factor(clinical_filtered$sample_group)
+design <- model.matrix(~0 + group)
+colnames(design) <- levels(group)
+
+dge <- DGEList(counts = expr_filtered)
+dge <- calcNormFactors(dge)
+v <- voom(dge, design)
+
+fit <- lmFit(v, design)
+contrast <- makeContrasts(HER2_Positive - Normal, levels = design)
+fit2 <- contrasts.fit(fit, contrast)
+fit2 <- eBayes(fit2)
+
+top_genes <- topTable(fit2, adjust = "fdr", number = Inf)
+write.csv(top_genes, "HER2_vs_Normal_DEGs.csv")
+```
+
+```{r, fig.height=5, fig.width=8}
+# Filter significant genes
+sig_genes <- top_genes %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1)
+write.csv(sig_genes, "HER2_vs_Normal_Significant_DEGs.csv")
+
+head(sig_genes)
+
+```
+library(ensembl
+)

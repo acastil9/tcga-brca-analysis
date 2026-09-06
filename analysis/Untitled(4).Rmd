@@ -1,0 +1,65 @@
+---
+title: "final RBIF114"
+output: html_document
+date: "2025-10-20"
+---
+
+```{r setup, include=FALSE}
+# ================================================
+# 1. Load Libraries
+# ================================================
+
+library(dplyr)
+library(readr)
+library(limma)
+library(edgeR)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+library(AnnotationDbi)
+library(ggplot2)
+library(tidyr)
+
+# ================================================
+# 2. Load Data
+# ================================================
+# Replace with your actual file paths
+expr <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_mRNA_expression.csv", row.names = 1, check.names = FALSE)
+clinical <- read.csv("/Users/andrea/RforBiomed/week5/TCGA_BRCA_clinical_data.csv", row.names = 1, check.names = FALSE)
+
+# ================================================
+# 3. Clean and Align Sample IDs
+# ================================================
+# Remove version suffix from Ensembl IDs (optional but recommended)
+rownames(expr) <- gsub("\\..*", "", rownames(expr))
+
+# Clean sample names to match clinical data
+colnames(expr) <- gsub("^(TCGA-\\w{2}-\\w{4}-\\w{3}).*", "\\1", colnames(expr))
+
+# Match HER2+ and normal samples
+clinical_filtered <- clinical %>%
+  filter(sample_type %in% c("Primary Tumor", "Solid Tissue Normal")) %>%
+  mutate(
+    sample_group = case_when(
+      sample_type == "Solid Tissue Normal" ~ "Normal",
+      sample_type == "Primary Tumor" & HER2_Final_Status_nature2012 == "Positive" ~ "HER2_Positive",
+      TRUE ~ NA_character_
+    ),
+    sample_id = bcr_sample_barcode
+  ) %>%
+  filter(sample_group %in% c("HER2_Positive", "Normal"))
+
+# Match and reorder expression matrix
+common_samples <- intersect(colnames(expr), clinical_filtered$sample_id)
+expr_filtered <- expr[, common_samples]
+clinical_filtered <- clinical_filtered %>% filter(sample_id %in% common_samples)
+expr_filtered <- expr_filtered[, clinical_filtered$sample_id]
+
+# ================================================
+# 4. Differential Expression Analysis (limma-voom)
+# ================================================
+group <- factor(clinical_filtered$sample_group)
+design <
+
+
+```
